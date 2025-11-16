@@ -1,3 +1,21 @@
+"""
+simple launch : python train_gpt2.py
+DDP Launch for e.g. 3 GPUs:
+torchrun --standalone --nproc_per_node=3 train_gpt2.py
+or
+export CUDA_VISIBLE_DEVICES=0,1,3
+torchrun --standalone --nproc_per_node=3 train_gpt2.py \
+    > train_gpt2_out.log 2>&1
+
+    or
+
+export CUDA_VISIBLE_DEVICES=0,1,3
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+torchrun --standalone --nproc_per_node=3 train_gpt2.py \
+    > train_gpt2_out.log 2>&1
+"""
+
+import torch.utils.checkpoint as cp
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
@@ -10,7 +28,7 @@ import inspect
 device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
 import datetime
 import numpy as np
-
+print("start")
 class CausalSelfAttention(nn.Module):
   def __init__(self, config):
     super().__init__()
@@ -27,6 +45,12 @@ class CausalSelfAttention(nn.Module):
     # regularization
     self.n_head = config.n_head
     self.n_embed = config.n_embed
+
+    # not really a bias, more of a mask, but following OpenAI naming convention
+    self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                         .view(1, 1,config.block_size, config.block_size ))
+
+
 
   def forward(self, x):
     B, T, C = x.size()  # Batch size, sequence length, n_embed
@@ -74,10 +98,19 @@ class Block(nn.Module):
     self.ln_2 = nn.LayerNorm(config.n_embed) # layer norm 2
     self.mlp = MLP(config) # fnn
 
+  # def forward(self, x):
+  #   x = x + self.attn(self.ln_1(x))
+  #   x = x + self.mlp(self.ln_2(x))
+  #   return x
+
   def forward(self, x):
-    x = x + self.attn(self.ln_1(x))
-    x = x + self.mlp(self.ln_2(x))
-    return x
+        return cp.checkpoint(self._forward_no_cp, x)
+
+  def _forward_no_cp(self, x):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+  
 
 @dataclass
 class GPTConfig:
@@ -228,8 +261,8 @@ class DataLoaderLite:
     assert split in{'train', 'val'}
 
     # get the shard filenames
-    data_root = "edu_fireweb10B"
-    shards = os.listdr(data_root)
+    data_root = "edu_fineweb10B"
+    shards = os.listdir(data_root)
     shards = [s for s in shards if split in s]
     shards = sorted(shards)
     shards = [os.path.join(data_root, s) for s in shards]
@@ -243,12 +276,7 @@ class DataLoaderLite:
     self.tokens = load_tokens(self.shards[self.current_shard])
     self.current_position = self.B * self.T * self.process_rank
   
-  def reset(self):
-    # state, init at shard zero 
-    self.current_shard = 0
-    self.tokens = load_tokens(self.shards[self.current_shard])
-    self.current_position = self.B * self.T * self.process_rank
-  
+
   def next_batch(self):
     B, T = self.B, self.T
     buf = self.tokens[self.current_position:self.current_position + B*T + 1]
@@ -259,7 +287,7 @@ class DataLoaderLite:
     # if loading next batch would be out of bounds, reset
     if self.current_position + (B*T*self.num_processes + 1) > len(self.tokens):
       self.current_shard = (self.current_shard + 1) % len(self.shards)
-      self.tokens = load_tokens(self.shards[self.current_position])
+      self.tokens = load_tokens(self.shards[self.current_shard])
       self.current_position = B * T * self.process_rank
     return x, y
 
@@ -281,12 +309,10 @@ if ddp:
     # assert torch.cuda.is_available(), "for now we need CUDA for DDP"
     # If a rank encounters a low-level NCCL error (deadlock, transport failure, etc.),
     # this makes NCCL surface the error to PyTorch instead of hanging forever.
-    os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
-    os.environ.setdefault("TORCH_NCCL_BLOCKING_WAIT", "1")
-    os.environ.setdefault("NCCL_P2P_DISABLE", "1")
-    os.environ.setdefault("NCCL_IB_DISABLE", "1")
-    ddp_local_rank = int(os.environ['LOCAL_RANK']) # used in multi-node setting, we are using only single node
-    torch.cuda.set_device(ddp_local_rank) 
+    # os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
+    # os.environ.setdefault("TORCH_NCCL_BLOCKING_WAIT", "1")
+    # os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+    # os.environ.setdefault("NCCL_IB_DISABLE", "1")
     # dist.init_process_group("nccl", init_method="env://",timeout=datetime.timedelta(seconds=90))
 
     # dist.init_process_group("nccl", init_method="env://",
@@ -326,7 +352,7 @@ if torch.cuda.is_available():
    torch.cuda.manual_seed(1337)
 
 total_batch_size = 491520 # 524288 # 2^19, ~0.5M in number of tokens
-B = 16 # micro batch size # try 64 once
+B = 32 # 32 # micro batch size # try 64 once
 T = 1024 # sequence length
 assert total_batch_size % (B * T * ddp_world_size) == 0
 grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
@@ -339,10 +365,10 @@ if master_process: # use only 0th process to print else everything will be print
 # if ddp:
 #     dist.destroy_process_group()
 
-
-
 train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="train")
-val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="val")
+torch.set_float32_matmul_precision("high")
+
+
 # once backward pass is over, DDP does an average across all gradients and deposits that avg on every single rank
 # thus does communication and synchronisation 
 max_lr = 6e-4  # as per GPT-paper
@@ -369,70 +395,51 @@ model = GPT(GPTConfig(vocab_size=50304)) # changed to nearest power of 2
 
 model.to(device)
 model=torch.compile(model)
+print("Model done")
 if ddp:
    model = DDP(model, device_ids =[ddp_local_rank])
 raw_model = model.module if ddp else model
 
 loss_accum = torch.zeros((), device=device)
 optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
-
+print("Optimizer done, training start")
 for step in range(max_steps):
+  loss_accum = torch.zeros((), device=device)
   t0 = time.time()
-  if step % 100 == 0:
-     model.eval()
-     val_loader.reset()
-     with torch.no_grad():
-        val_loss_accum = 0.0
-        val_loss_steps = 20
-        for _ in range(val_loss_steps):
-           x, y = val_loader.next_batch()
-           x, y = x.to(device), y.to(device)
-           with torch.autocast(device_type=device, dtype=torch.bfloat16):
-              logits, loss = model(x, y)
-           loss = loss / val_loss_steps
-           val_loss_accum += loss.detcach()
-
-  if ddp:
-    dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG) # take average of gradients across all gpus
-  if master_process:
-     print(f"validation loss : {val_loss_accum.item():.4f}")
-
-
-
-  # training loop
-  model.train()
   optimizer.zero_grad()
   for micro_step in range(grad_accum_steps): 
-        x, y = train_loader.next_batch()
-        x, y = x.to(device), y.to(device)
-        
-        with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-          logits, loss = model(x, y)
-        # loss is scaled below to account for gradient accumulation as the gradients just add on each successful backward()
-        # addition of gradients correspons to SUM in the objective, but instead of SUM, we want MEAN.
-        # So loss is scaled here
-        loss = loss / grad_accum_steps 
-        loss_accum += loss.detach() # detach the tensor from computational graph
-        if ddp:
-          model.requires_backward_grad_sync = (micro_step == grad_accum_steps - 1) # sync only at last micro step and not everytime
-        loss.backward()
-  #  
+      x, y = train_loader.next_batch()
+      x, y = x.to(device), y.to(device)
+      
+      with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+        logits, loss = model(x, y)
+      # loss is scaled below to account for gradient accumulation as the gradients just add on each successful backward()
+      # addition of gradients correspons to SUM in the objective, but instead of SUM, we want MEAN.
+      # So loss is scaled here
+      loss = loss / grad_accum_steps 
+      loss_accum += loss.detach() # detach the tensor from computational graph
+      if ddp:
+         model.requires_backward_grad_sync = (micro_step == grad_accum_steps - 1) # sync only at last micro step and not everytime
+      loss.backward()
+  if ddp:
+    dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG) # take average of gradients across all gpus
   norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-    # determine and set lr for this iteration
+  # determine and set lr for this iteration
   lr = get_lr(step)
   for param_group in optimizer.param_groups:
     param_group['lr'] = lr
-    optimizer.step()
-    torch.cuda.synchronize() # wait for gpu to finish work 
-    t1 = time.time()
-    dt = (t1-t0)*1000
-    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
-    tokens_per_sec = tokens_processed / (t1 - t0)
-    if master_process:
-      print(f"step : {step} | loss : {loss_accum.item():.6f} | tok/sec : {tokens_per_sec} | lr : {lr:.4f} | dt : {dt:.2f}ms")
-  if ddp:
+  optimizer.step()
+  torch.cuda.synchronize() # wait for gpu to finish work 
+  t1 = time.time()
+  dt = (t1-t0)*1000
+  tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
+  tokens_per_sec = tokens_processed / (t1 - t0)
+  if master_process:
+    print(f"step : {step} | loss : {loss_accum.item():.6f} | tok/sec : {tokens_per_sec} | lr : {lr:.6e} | dt : {dt:.2f}ms")
+if ddp:
    dist.destroy_process_group()
+import sys; sys.exit(0)
 
 
 
