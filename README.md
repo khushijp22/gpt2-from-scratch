@@ -4,20 +4,21 @@ This repository contains a from-scratch implementation of GPT-2 in pure PyTorch,
 The goal of this project is not just to train GPT-2, but to understand how it works internally and reproduce key training behaviors of the original model using modern PyTorch features.
 ## Datasets
 
-### **1️. Tiny Shakespeare (for initial optimization)**
-Used for early experiments on model performance (TF32, BF16, torch.compile, flash attention).  
-File: `input.txt`, `optimization.ipynb`
 
-### **2️. FineWeb-Edu 10BT (training dataset)**
+
+### **1. FineWeb-Edu 10BT (training dataset)**
 A large, high-quality educational subset of Common Crawl curated by HuggingFace, used as the primary corpus for training. The dataset is streamed (not fully downloaded), tokenized with `tiktoken`, and stored as ~100 binary shards (~20GB total) via `fineweb.py`.
 Chosen as an open alternative to the proprietary WebText used in the original GPT-2 training.
 Dataset link :  https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu
    
-### **3️. HellaSwag (evaluation dataset)**
+### **2. HellaSwag (evaluation dataset)**
 
-HellaSwag is a multiple-choice commonsense reasoning benchmark used to compare performance against GPT-2 baselines. Each example provides a context and four possible continuations, and the model must select the most plausible one. In this project, evaluation is run periodically during training using `hellaswag.py`.
+HellaSwag is a multiple-choice commonsense reasoning benchmark used to compare performance against GPT-2 baselines. Each example provides a context and four possible continuations, and the model must select the most plausible one. In this project, evaluation is run periodically during training using `hellaswag.py`. 
+Repo : https://github.com/rowanz/hellaswag  
 
-Repo: https : //github.com/rowanz/hellaswag  
+### **3. Tiny Shakespeare (for initial optimization)**
+Used for early experiments on model performance (TF32, BF16, torch.compile, flash attention).  
+File: `input.txt`, `optimization.ipynb`
 
 
 ## Training Details
