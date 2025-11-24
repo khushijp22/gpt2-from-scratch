@@ -28,7 +28,7 @@ import inspect
 device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
 import datetime
 import numpy as np
-print("start")
+
 class CausalSelfAttention(nn.Module):
   def __init__(self, config):
     super().__init__()
@@ -305,24 +305,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 ddp = int(os.environ.get('RANK', -1)) != -1 # check if this is a ddp run
 
 if ddp:
-    # use of DDP atm demands CUDA, we set the device appropriately according to rank
-    # assert torch.cuda.is_available(), "for now we need CUDA for DDP"
-    # If a rank encounters a low-level NCCL error (deadlock, transport failure, etc.),
-    # this makes NCCL surface the error to PyTorch instead of hanging forever.
-    # os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
-    # os.environ.setdefault("TORCH_NCCL_BLOCKING_WAIT", "1")
-    # os.environ.setdefault("NCCL_P2P_DISABLE", "1")
-    # os.environ.setdefault("NCCL_IB_DISABLE", "1")
-    # dist.init_process_group("nccl", init_method="env://",timeout=datetime.timedelta(seconds=90))
-
-    # dist.init_process_group("nccl", init_method="env://",
-    #                         timeout=datetime.timedelta(seconds=90))
-    # dist.init_process_group("nccl", init_method="env://")
+    
     dist.init_process_group("nccl", init_method="env://")
-
-
-
-
     ddp_rank = dist.get_rank() # unique rank id for each process
     ddp_local_rank = int(os.environ['LOCAL_RANK']) # used in multi-node setting, we are using only single node
     torch.cuda.set_device(ddp_local_rank) 
@@ -444,7 +428,3 @@ import sys; sys.exit(0)
 
 
 
-# dataset for gpt2 and gpt3 were never released 
-# so, we use SlimPajama subest of the RedPajama dataset
-# Finweb dataset collects high quality common crawl dataset
-# Hugging face released FineWeb-Edu dataset which has high educational content
