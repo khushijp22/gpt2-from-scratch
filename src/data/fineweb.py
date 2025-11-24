@@ -83,7 +83,7 @@ if token_count > 0:
     split = "val" if shard_index == 0 else "train"
     filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_{split}_{shard_index:06d}")
     write_datafile(filename, all_tokens_np[:token_count])
-    print(f"✅ Wrote final shard {shard_index} (partial)")
+    print(f"Wrote final shard {shard_index} (partial)")
 
 
 
