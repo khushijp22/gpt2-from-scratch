@@ -358,7 +358,7 @@ torch.set_float32_matmul_precision("high")
 max_lr = 6e-4  # as per GPT-paper
 min_lr = max_lr * 0.1
 warmup_steps = 762 # 375e6 / 491250 paper says they warmup for 375M tokens
-max_steps = 20345 # 10^9/ 491520
+max_steps = 20345 # 10^10/ 491520
 def get_lr(it):
   #  linear warmup for warm-iter steps
   if it < warmup_steps:
